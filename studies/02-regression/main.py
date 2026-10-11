@@ -261,7 +261,7 @@ print("rmse (val): ", rmse(y_val, y_pred))
 # nearly-singular matrices (singular with noise) give large numbers in their inverses when trying to retrieve info from points "flattened" into noise
 
 # here is nearly-singular case - noise prevents errors but gives huge weights
-# solution - regularization - adding a parameter to the diagonal (0.01 for example)
+# solution - regularization - adding a parameter to the diagonal (0.01-intro for example)
 
 def train_linear_regression_reg(X, y, r=0.01):
     X = np.column_stack([np.ones(X.shape[0]), X])
@@ -292,7 +292,7 @@ def compare_rs():
 
 # compare_rs()
 
-# --> this showed that r~0.0001 is a good parameter with only slightest worsening as it increases (+ 0.02 rmse as it grows to 10)
+# --> this showed that r~0.0001 is a good parameter with only slightest worsening as it increases (+ 0.02-regression rmse as it grows to 10)
 
 # Section: Using the model - training with train+val & using on a simple row
 

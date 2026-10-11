@@ -130,7 +130,7 @@ def compare_r():
 
 print("\n-------- r comparison ----------\n")
 compare_r()
-# 0 gives the smallest rmse, 0.01 is alright - most probably means that we do not have even closely duplicate columns, so regularization is unnecessary (?)
+# 0 gives the smallest rmse, 0.01-intro is alright - most probably means that we do not have even closely duplicate columns, so regularization is unnecessary (?)
 
 # Seed Comparison
 
