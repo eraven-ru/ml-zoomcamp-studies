@@ -2,7 +2,8 @@ import pprint
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
+from tqdm.auto import tqdm
+from sklearn.model_selection import train_test_split, KFold
 from sklearn.metrics import accuracy_score, roc_curve, auc, roc_auc_score
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.linear_model import LogisticRegression
@@ -298,6 +299,70 @@ neg_idx = np.random.randint(0, len(neg), n)
 auc_interpretation = (pos[pos_idx] > neg[neg_idx]).mean()
 print("auc_interpretation: ", auc_interpretation)
 
+# Section: Cross-Validation
+# - method of splitting full-train dataset (train + val) differently
+# - full-train is split into k folds & sent to k training rounds with each fold as a val-data in turn
+
+# ii: cross-validation is used for parameter-tuning (ie C - regularization) by calculating mean & std of roc_auc
+# ii: use cross-validation on smaller datasets or to see the stability of the model
+
+# 1: train & predict methods
+
+def train(df_train, y_train, C=1.0):
+    dicts = df_train[categorical_cols + numerical_cols].to_dict(orient='records')
+
+    dv = DictVectorizer(sparse=False)
+    X_train = dv.fit_transform(dicts)
+
+    model = LogisticRegression(C=C, max_iter=5000)
+    model.fit(X_train, y_train)
+
+    return model, dv
+
+def predict(df, dv, model):
+    dicts = df[categorical_cols + numerical_cols].to_dict(orient='records')
+    X = dv.transform(dicts)
+
+    y_pred = model.predict_proba(X)[:, 1]
+
+    return y_pred
+
+# KFold
+
+print_section('parameter tuning (cross-validation)')
+print('# uncomment to show the comparison')
+
+def compare_parameters():
+    for C in tqdm([0.001, 0.01, 0.1, 0.5, 1, 5, 10]):
+        kfold = KFold(n_splits=5, shuffle=True, random_state=1)
+        scores = []
+
+        for train_idx, val_idx in kfold.split(df_full_train):
+            df_train = df_full_train.iloc[train_idx]
+            df_val = df_full_train.iloc[val_idx]
+
+            y_train = df_train.churn.values
+            y_val = df_val.churn.values
+
+            model, dv = train(df_train, y_train, C=C)
+            y_pred = predict(df_val, dv, model)
+
+            auc = roc_auc_score(y_val, y_pred)
+            scores.append(auc)
+
+        print('C = %.3f; AUC = %.6f +- %.6f' % (C, np.mean(scores), np.std(scores)))
+        # --> no big variations of auc - the model & data are pretty stable, C=1.0 is best
+
+# compare_parameters()
+
+# final training
+
+model, dv = train(df_full_train, y_full_train, C=1.0)
+y_pred = predict(df_test, dv, model)
+auc = roc_auc_score(y_test, y_pred)
+
+print_section('final training')
+print('final auc score: ', auc)
 
 
 
