@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import xgboost as xgb
 import seaborn as sns
 import matplotlib.pyplot as plt
 
@@ -205,19 +206,21 @@ def score_decision_tree(max_depth=None, min_samples_leaf=1):
 
     scores.append((max_depth, min_samples_leaf, auc))
 
-depths = [None, 1, 2, 4, 5, 6, 10, 15]
-samples = [1, 2, 5, 15, 20, 100, 200]
+def dt_parameters_heatmap():
+    depths = [None, 1, 2, 4, 5, 6, 10, 15]
+    samples = [1, 2, 5, 15, 20, 100, 200]
 
-for d in depths:
-    for s in samples:
-        score_decision_tree(max_depth=d, min_samples_leaf=s)
+    for d in depths:
+        for s in samples:
+            score_decision_tree(max_depth=d, min_samples_leaf=s)
 
-df_scores = pd.DataFrame(scores, columns=['max_depth', 'min_samples_leaf', 'auc'])
-df_scores_table = df_scores.pivot(index='min_samples_leaf', columns=['max_depth'], values='auc')
+    df_scores = pd.DataFrame(scores, columns=['max_depth', 'min_samples_leaf', 'auc'])
+    df_scores_table = df_scores.pivot(index='min_samples_leaf', columns=['max_depth'], values='auc')
 
-sns.heatmap(df_scores_table, annot=True, fmt='.3f')
-plt.show()
+    sns.heatmap(df_scores_table, annot=True, fmt='.3f')
+    plt.show()
 
+# dt_parameters_heatmap()
 # min_samples_leaf = 15 is best
 # max_depth has best scores at [None, 6, 10, 15] - we take 6 for simplicity
 
@@ -337,3 +340,315 @@ print()
 print('best rf score: ', auc)
 
 # Section: Gradient Boosting
+
+# ii: boosting is an algorithm for ensemble learning where models are trained sequentially
+# ii: each learning on mistakes of the previous model
+
+# ii: Gradient Boosting Trees is a boosting algorithm where all models are trees
+
+# todo: train an xgboost model, print its progress by rounds, parse the results & plot train_auc & val_auc
+
+print_section('gradient boosting trees')
+
+features = list(dv.get_feature_names_out())
+dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=features)
+dval = xgb.DMatrix(X_val, label=y_val, feature_names=features)
+
+watchlist = [(dtrain, 'train'), (dval, 'val')]
+watchlist_result = {}
+xgb_params = {
+    'eta': 0.3, # learning rate
+    'max_depth': 6,
+    'min_child_weight': 1,
+
+    'objective': 'binary:logistic',
+    'eval_metric': 'auc',
+    'nthread': 8, # n of cores
+
+    'seed': 1,
+}
+
+model = xgb.train(xgb_params, dtrain,
+                  num_boost_round=100,
+                  evals=watchlist,
+                  evals_result=watchlist_result,
+                  verbose_eval=5
+)
+
+y_pred = model.predict(dval)
+auc = roc_auc_score(y_val, y_pred)
+
+print()
+print('auc (xgboost model w/ 100 rounds): ', auc)
+
+def plot_xgb_iteration_aucs():
+    train_aucs = list(watchlist_result['train'].values())[0]
+    val_aucs = list(watchlist_result['val'].values())[0]
+
+    scores_data = list(zip(range(1, len(train_aucs) + 1), train_aucs, val_aucs))
+    df_scores = pd.DataFrame(scores_data, columns=['iteration', 'train_auc', 'val_auc'])
+
+    plt.plot(df_scores.iteration, df_scores.train_auc, label='train')
+    plt.plot(df_scores.iteration, df_scores.val_auc, label='val')
+    plt.legend()
+    plt.show()
+
+# plot_xgb_iteration_aucs()
+# val_auc stops improving after ~10-25, declines after 35
+# train auc is perfect after ~40 - clear sign of overfitting
+# NB: Gradient Boosting models are prone to overfitting - it is important to limit parameters
+
+# Section: XGBoost Parameter Tuning
+
+# todo: most important parameters are 'eta', 'max_depth' & 'min_child_weight'
+# - they are tuned in that order
+
+print_section('xgboost tuning')
+
+def eta_tuning():
+    etas = [0.01, 0.05, 0.1, 0.3, 1.0]
+    scores = {}
+
+    for eta in etas:
+        eval_results = {}
+        xgb_params = {
+            'eta': eta,
+            'max_depth': 6,
+            'min_child_weight': 1,
+
+            'objective': 'binary:logistic',
+            'eval_metric': 'auc',
+            'nthread': 8,  # n of cores
+
+            'seed': 1,
+        }
+
+        model = xgb.train(xgb_params, dtrain,
+                          num_boost_round=200,
+                          evals=watchlist,
+                          evals_result=eval_results,
+                          verbose_eval=5
+        )
+
+        train_aucs = list(eval_results['train'].values())[0]
+        val_aucs = list(eval_results['val'].values())[0]
+
+        evals_data = list(zip(range(1, len(train_aucs) + 1), train_aucs, val_aucs))
+        evals_df = pd.DataFrame(evals_data, columns=['iteration', 'train_auc', 'val_auc'])
+
+        scores[f'eta={eta}'] = evals_df
+
+    for eta in etas:
+        evals_df = scores[f'eta={eta}']
+        plt.plot(evals_df.iteration, evals_df.val_auc, label=f'eta={eta}')
+
+    plt.legend()
+    plt.show()
+
+# eta_tuning()
+# NB: we are interested in a value that gives faster rise (less rounds)
+# NB: & and (!!) stays stable on subsequent rounds
+# eta = 0.1 gives best performance based on that - reaches top on ~60, is stable till 200
+
+eta = 0.1
+
+def max_depth_tuning():
+    max_depth_options = [3, 5, 10, 15]
+    scores = {}
+
+    for d in max_depth_options:
+        eval_results = {}
+        xgb_params = {
+            'eta': eta,
+            'max_depth': d,
+            'min_child_weight': 1,
+
+            'objective': 'binary:logistic',
+            'eval_metric': 'auc',
+            'nthread': 8,  # n of cores
+
+            'seed': 1,
+        }
+
+        model = xgb.train(xgb_params, dtrain,
+                          num_boost_round=200,
+                          evals=watchlist,
+                          evals_result=eval_results,
+                          verbose_eval=5
+        )
+
+        train_aucs = list(eval_results['train'].values())[0]
+        val_aucs = list(eval_results['val'].values())[0]
+
+        evals_data = list(zip(range(1, len(train_aucs) + 1), train_aucs, val_aucs))
+        evals_df = pd.DataFrame(evals_data, columns=['iteration', 'train_auc', 'val_auc'])
+
+        scores[f'max_depth={d}'] = evals_df
+
+    for d in max_depth_options:
+        evals_df = scores[f'max_depth={d}']
+        plt.plot(evals_df.iteration, evals_df.val_auc, label=f'max_depth={d}')
+
+    plt.legend()
+    plt.show()
+
+# max_depth_tuning()
+# max_depth = 3 takes a little longer to reach max, but its max is bigger & is stable till end
+
+max_depth = 3
+
+def min_child_weight_tuning():
+    weight_options = [1, 5, 10, 30]
+    scores = {}
+
+    for w in weight_options:
+        eval_results = {}
+        xgb_params = {
+            'eta': eta,
+            'max_depth': max_depth,
+            'min_child_weight': w,
+
+            'objective': 'binary:logistic',
+            'eval_metric': 'auc',
+            'nthread': 8,  # n of cores
+
+            'seed': 1,
+        }
+
+        model = xgb.train(xgb_params, dtrain,
+                          num_boost_round=200,
+                          evals=watchlist,
+                          evals_result=eval_results,
+                          verbose_eval=5
+        )
+
+        train_aucs = list(eval_results['train'].values())[0]
+        val_aucs = list(eval_results['val'].values())[0]
+
+        evals_data = list(zip(range(1, len(train_aucs) + 1), train_aucs, val_aucs))
+        evals_df = pd.DataFrame(evals_data, columns=['iteration', 'train_auc', 'val_auc'])
+
+        scores[f'min_child_weight={w}'] = evals_df
+
+    for w in weight_options:
+        evals_df = scores[f'min_child_weight={w}']
+        plt.plot(evals_df.iteration, evals_df.val_auc, label=f'min_child_weight={w}')
+
+    plt.legend()
+    plt.ylim(0.81, 0.84)
+    plt.show()
+
+# min_child_weight_tuning()
+# the difference is very small - default of 1 gives best value at ~175 rounds
+
+min_child_weight = 1
+
+xgb_params = {
+    'eta': eta,
+    'max_depth': max_depth,
+    'min_child_weight': min_child_weight,
+
+    'objective': 'binary:logistic',
+    'eval_metric': 'auc',
+    'nthread': 8,  # n of cores
+
+    'seed': 1,
+}
+
+model = xgb.train(xgb_params, dtrain, num_boost_round=175)
+y_pred = model.predict(dval)
+
+auc = roc_auc_score(y_val, y_pred)
+print('auc (tuned: eta=0.1; max_depth=3; min_child_weigh=1; rounds=175): ', auc)
+
+# Section: Selecting the best model
+
+# ii: in this session we trained & tuned 3 models:
+# - decision tree
+# - random forest
+# - gradient boosting trees
+
+# todo: compare auc scores, then train the best one on the full-train dataset
+
+print_section('selecting the best model')
+
+# decision tree
+dt = DecisionTreeClassifier(max_depth=6, min_samples_leaf=15)
+dt.fit(X_train, y_train)
+
+y_pred = dt.predict_proba(X_val)[:,1]
+auc = roc_auc_score(y_val, y_pred)
+print('decision tree auc: ', auc)
+
+# random forest
+rf = RandomForestClassifier(
+    n_estimators=100,
+    max_depth=10,
+    min_samples_leaf=3,
+    random_state=1
+)
+
+rf.fit(X_train, y_train)
+
+y_pred = rf.predict_proba(X_val)[:, 1]
+auc = roc_auc_score(y_val, y_pred)
+print('random forest auc: ', auc)
+
+# xgboost
+xgb_params = {
+    'eta': 0.1,
+    'max_depth': 3,
+    'min_child_weight': 1,
+
+    'objective': 'binary:logistic',
+    'eval_metric': 'auc',
+    'nthread': 8,  # n of cores
+
+    'seed': 1,
+}
+
+model = xgb.train(xgb_params, dtrain, num_boost_round=175)
+y_pred = model.predict(dval)
+
+auc = roc_auc_score(y_val, y_pred)
+print('gradient boosting auc: ', auc)
+
+# NB: xgboost is a very good model & it often performs better than others
+# but: it is harder to tune - has more significant parameters
+
+y_full_train = (df_full_train[target] == 'default').astype(int).values
+df_full_train = df_full_train.reset_index(drop=True)
+del df_full_train[target]
+
+full_train_dicts = df_full_train.to_dict(orient='records')
+test_dicts = df_test.to_dict(orient='records')
+
+dv = DictVectorizer(sparse=True)
+dv.fit(full_train_dicts)
+
+X_full_train = dv.transform(full_train_dicts)
+X_test = dv.transform(test_dicts)
+
+features = list(dv.get_feature_names_out())
+dfulltrain = xgb.DMatrix(X_full_train, label=y_full_train, feature_names=features)
+dtest = xgb.DMatrix(X_test, feature_names=features)
+
+xgb_params = {
+    'eta': 0.1,
+    'max_depth': 3,
+    'min_child_weight': 1,
+
+    'objective': 'binary:logistic',
+    'nthread': 8,
+
+    'seed': 8
+}
+
+model = xgb.train(xgb_params, dfulltrain, num_boost_round=175)
+y_pred = model.predict(dtest)
+
+auc = roc_auc_score(y_test, y_pred)
+
+print()
+print('final xgboost model auc (test score): ', auc)
+# final auc is close to val_auc - that means model is not overfitted & good at generalizing
